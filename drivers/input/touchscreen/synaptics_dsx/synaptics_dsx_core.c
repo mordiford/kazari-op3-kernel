@@ -750,6 +750,30 @@ static ssize_t synaptics_rmi4_virtual_key_map_show(struct kobject *kobj,
 	return count;
 }
 
+static inline unsigned short synaptics_sqrt(unsigned int num)
+{
+	unsigned short root, remainder, place;
+
+	root = 0;
+	remainder = num;
+	place = 0x4000;
+
+	while (place > remainder)
+		place = place >> 2;
+	while (place)
+	{
+		if (remainder >= root + place)
+		{
+			remainder = remainder - root - place;
+			root = root + (place << 1);
+		}
+		root = root >> 1;
+		place = place >> 2;
+	}
+
+	return root;
+}
+
 static int synaptics_rmi4_f11_abs_report(struct synaptics_rmi4_data *rmi4_data,
 		struct synaptics_rmi4_fn *fhandler)
 {
@@ -875,7 +899,7 @@ static int synaptics_rmi4_f11_abs_report(struct synaptics_rmi4_data *rmi4_data,
 					ABS_MT_POSITION_Y, y);
 #ifdef REPORT_2D_W
 			input_report_abs(rmi4_data->input_dev,
-					ABS_MT_TOUCH_MAJOR, max(wx, wy));
+					ABS_MT_TOUCH_MAJOR, synaptics_sqrt(wx*wx + wy*wy));
 			input_report_abs(rmi4_data->input_dev,
 					ABS_MT_TOUCH_MINOR, min(wx, wy));
 #endif
@@ -1068,7 +1092,7 @@ static int synaptics_rmi4_f12_abs_report(struct synaptics_rmi4_data *rmi4_data,
 			} else {
 				input_report_abs(rmi4_data->input_dev,
 						ABS_MT_TOUCH_MAJOR,
-						max(wx, wy));
+						synaptics_sqrt(wx*wx + wy*wy));
 				input_report_abs(rmi4_data->input_dev,
 						ABS_MT_TOUCH_MINOR,
 						min(wx, wy));
@@ -1533,7 +1557,8 @@ static int synaptics_rmi4_f11_init(struct synaptics_rmi4_data *rmi4_data,
 			rmi4_data->sensor_max_x,
 			rmi4_data->sensor_max_y);
 
-	rmi4_data->max_touch_width = MAX_F11_TOUCH_WIDTH;
+	rmi4_data->max_touch_width =
+		synaptics_sqrt(MAX_F11_TOUCH_WIDTH * MAX_F11_TOUCH_WIDTH * 2);
 
 	synaptics_rmi4_set_intr_mask(fhandler, fd, intr_count);
 
@@ -1885,7 +1910,9 @@ static int synaptics_rmi4_f12_init(struct synaptics_rmi4_data *rmi4_data,
 				((unsigned short)ctrl_8.max_y_coord_lsb << 0) |
 				((unsigned short)ctrl_8.max_y_coord_msb << 8);
 
-		rmi4_data->max_touch_width = MAX_F12_TOUCH_WIDTH;
+		rmi4_data->max_touch_width = synaptics_sqrt(
+				rmi4_data->num_of_rx*rmi4_data->num_of_rx +
+				rmi4_data->num_of_tx*rmi4_data->num_of_tx);
 	} else {
 		rmi4_data->wedge_sensor = true;
 

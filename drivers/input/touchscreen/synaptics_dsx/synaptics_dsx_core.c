@@ -1413,8 +1413,6 @@ static int synaptics_rmi4_irq_enable(struct synaptics_rmi4_data *rmi4_data,
 		bool enable, bool attn_only)
 {
 	int retval = 0;
-	const struct synaptics_dsx_board_data *bdata =
-			rmi4_data->hw_if->board_data;
 
 	if (attn_only) {
 		retval = synaptics_rmi4_int_enable(rmi4_data, enable);
@@ -1432,15 +1430,7 @@ static int synaptics_rmi4_irq_enable(struct synaptics_rmi4_data *rmi4_data,
 		/* Process and clear interrupts */
 		synaptics_rmi4_sensor_report(rmi4_data, false);
 
-		retval = request_threaded_irq(rmi4_data->irq, NULL,
-				synaptics_rmi4_irq, bdata->irq_flags,
-				PLATFORM_DRIVER_NAME, rmi4_data);
-		if (retval < 0) {
-			dev_err(rmi4_data->pdev->dev.parent,
-					"%s: Failed to create irq thread\n",
-					__func__);
-			return retval;
-		}
+		enable_irq(rmi4_data->irq);
 
 		retval = synaptics_rmi4_int_enable(rmi4_data, true);
 		if (retval < 0)
@@ -1450,7 +1440,6 @@ static int synaptics_rmi4_irq_enable(struct synaptics_rmi4_data *rmi4_data,
 	} else {
 		if (rmi4_data->irq_enabled) {
 			disable_irq(rmi4_data->irq);
-			free_irq(rmi4_data->irq, rmi4_data);
 			rmi4_data->irq_enabled = false;
 		}
 	}
@@ -3320,6 +3309,21 @@ static int synaptics_rmi4_probe(struct platform_device *pdev)
 
 	rmi4_data->irq = gpio_to_irq(bdata->irq_gpio);
 
+	retval = request_threaded_irq(rmi4_data->irq, NULL,
+			synaptics_rmi4_irq, bdata->irq_flags,
+			PLATFORM_DRIVER_NAME, rmi4_data);
+	if (retval < 0) {
+		dev_err(rmi4_data->pdev->dev.parent,
+				"%s: Failed to create irq thread\n",
+				__func__);
+		goto err_request_irq;
+	}
+
+	rmi4_data->irq_enabled = true;
+
+	if (rmi4_data->enable_wakeup_gesture)
+		irq_set_irq_wake(rmi4_data->irq, 1);
+
 	retval = synaptics_rmi4_irq_enable(rmi4_data, true, false);
 	if (retval < 0) {
 		dev_err(&pdev->dev,
@@ -3396,6 +3400,8 @@ err_virtual_buttons:
 	synaptics_rmi4_irq_enable(rmi4_data, false, false);
 
 err_enable_irq:
+	free_irq(rmi4_data->irq, rmi4_data);
+err_request_irq:
 #ifdef CONFIG_FB
 	fb_unregister_client(&rmi4_data->fb_notifier);
 #endif
@@ -3462,6 +3468,7 @@ static int synaptics_rmi4_remove(struct platform_device *pdev)
 	}
 
 	synaptics_rmi4_irq_enable(rmi4_data, false, false);
+	free_irq(rmi4_data->irq, rmi4_data);
 
 #ifdef CONFIG_FB
 	fb_unregister_client(&rmi4_data->fb_notifier);

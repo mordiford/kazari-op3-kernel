@@ -976,7 +976,6 @@ extern unsigned int sched_upmigrate;
 extern unsigned int sched_downmigrate;
 extern unsigned int sched_init_task_load_pelt;
 extern unsigned int sched_init_task_load_windows;
-extern unsigned int sched_heavy_task;
 extern unsigned int up_down_migrate_scale_factor;
 extern unsigned int sysctl_sched_restrict_cluster_spill;
 extern unsigned int sched_pred_alert_load;
@@ -1198,6 +1197,11 @@ struct related_thread_group *task_related_thread_group(struct task_struct *p)
 	return rcu_dereference(p->grp);
 }
 
+static inline int is_task_in_related_thread_group(struct task_struct *p)
+{
+	return rcu_access_pointer(p->grp) != NULL;
+}
+
 #else	/* CONFIG_SCHED_HMP */
 
 struct hmp_sched_stats;
@@ -1250,6 +1254,11 @@ static inline
 struct related_thread_group *task_related_thread_group(struct task_struct *p)
 {
 	return NULL;
+}
+
+static inline int is_task_in_related_thread_group(struct task_struct *p)
+{
+	return 0;
 }
 
 static inline u32 task_load(struct task_struct *p) { return 0; }

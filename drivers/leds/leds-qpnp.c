@@ -312,12 +312,10 @@ u32 convert_ramp_ms_store (u32 ramp_step_ms)
 
 int check_for_notification_led(struct led_classdev *led_cdev)
 {
-	if ((strcmp(led_cdev->name, "red") == 0) ||
-		(strcmp(led_cdev->name, "green") == 0) ||
-		(strcmp(led_cdev->name, "blue") == 0))
-		return 1;
+	if (strcmp(led_cdev->name, "button-backlight") == 0)
+		return 0;
 
-	return 0;
+	return 1;
 }
 
 int convert_brightness (int brightness)

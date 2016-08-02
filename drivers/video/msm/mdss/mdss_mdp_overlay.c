@@ -1757,7 +1757,8 @@ int mdss_mode_switch_post(struct msm_fb_data_type *mfd, u32 mode)
 		 * DCS to panel.
 		 */
 		frame_rate = mdss_panel_get_framerate
-			(&(ctl->panel_data->panel_info));
+			(&(ctl->panel_data->panel_info),
+			FPS_RESOLUTION_HZ);
 		if (!(frame_rate >= 24 && frame_rate <= 240))
 			frame_rate = 24;
 		frame_rate = ((1000/frame_rate) + 1);
@@ -2745,7 +2746,8 @@ static void cache_initial_timings(struct mdss_panel_data *pdata)
 		 * actual dfps update happen in hw.
 		 */
 		pdata->panel_info.current_fps =
-			mdss_panel_get_framerate(&pdata->panel_info);
+			mdss_panel_get_framerate(&pdata->panel_info,
+				FPS_RESOLUTION_DEFAULT);
 
 		/*
 		 * Keep the initial fps and porch values for this panel before
@@ -2753,7 +2755,8 @@ static void cache_initial_timings(struct mdss_panel_data *pdata)
 		 * in further calculations.
 		 */
 		pdata->panel_info.default_fps =
-			mdss_panel_get_framerate(&pdata->panel_info);
+			mdss_panel_get_framerate(&pdata->panel_info,
+				FPS_RESOLUTION_DEFAULT);
 
 		if (pdata->panel_info.dfps_update ==
 					DFPS_IMMEDIATE_PORCH_UPDATE_MODE_VFP) {
@@ -2765,7 +2768,9 @@ static void cache_initial_timings(struct mdss_panel_data *pdata)
 		} else if (pdata->panel_info.dfps_update ==
 				DFPS_IMMEDIATE_PORCH_UPDATE_MODE_HFP ||
 			pdata->panel_info.dfps_update ==
-				DFPS_IMMEDIATE_MULTI_UPDATE_MODE_CLK_HFP) {
+				DFPS_IMMEDIATE_MULTI_UPDATE_MODE_CLK_HFP ||
+			pdata->panel_info.dfps_update ==
+				DFPS_IMMEDIATE_MULTI_MODE_HFP_CALC_CLK) {
 			pdata->panel_info.saved_total =
 				mdss_panel_get_htotal(&pdata->panel_info, true);
 			pdata->panel_info.saved_fporch =
@@ -2834,8 +2839,25 @@ static void dfps_update_panel_params(struct mdss_panel_data *pdata,
 		pdata->panel_info.lcdc.h_pulse_width = data->hpw;
 
 		pdata->panel_info.clk_rate = data->clk_rate;
+		if (pdata->panel_info.type == DTV_PANEL)
+			pdata->panel_info.clk_rate *= 1000;
 
 		dfps_update_fps(&pdata->panel_info, new_fps);
+	} else if (pdata->panel_info.dfps_update ==
+		DFPS_IMMEDIATE_MULTI_MODE_HFP_CALC_CLK) {
+
+		pr_debug("hfp=%d, hbp=%d, hpw=%d, clk=%d, fps=%d\n",
+			data->hfp, data->hbp, data->hpw,
+			data->clk_rate, data->fps);
+
+		pdata->panel_info.lcdc.h_front_porch = data->hfp;
+		pdata->panel_info.lcdc.h_back_porch  = data->hbp;
+		pdata->panel_info.lcdc.h_pulse_width = data->hpw;
+
+		pdata->panel_info.clk_rate = data->clk_rate;
+
+		dfps_update_fps(&pdata->panel_info, new_fps);
+		mdss_panel_update_clk_rate(&pdata->panel_info, new_fps);
 	} else {
 		dfps_update_fps(&pdata->panel_info, new_fps);
 		mdss_panel_update_clk_rate(&pdata->panel_info, new_fps);
@@ -2910,7 +2932,9 @@ static ssize_t dynamic_fps_sysfs_wta_dfps(struct device *dev,
 	}
 
 	if (pdata->panel_info.dfps_update ==
-		DFPS_IMMEDIATE_MULTI_UPDATE_MODE_CLK_HFP) {
+		DFPS_IMMEDIATE_MULTI_UPDATE_MODE_CLK_HFP ||
+		pdata->panel_info.dfps_update ==
+		DFPS_IMMEDIATE_MULTI_MODE_HFP_CALC_CLK) {
 		if (sscanf(buf, "%d %d %d %d %d",
 		    &data.hfp, &data.hbp, &data.hpw,
 		    &data.clk_rate, &data.fps) != 5) {
@@ -2925,7 +2949,8 @@ static ssize_t dynamic_fps_sysfs_wta_dfps(struct device *dev,
 		}
 	}
 
-	panel_fps = mdss_panel_get_framerate(&pdata->panel_info);
+	panel_fps = mdss_panel_get_framerate(&pdata->panel_info,
+			FPS_RESOLUTION_DEFAULT);
 
 	if (data.fps == panel_fps) {
 		pr_debug("%s: FPS is already %d\n",
@@ -4108,7 +4133,8 @@ static int mdss_fb_get_metadata(struct msm_fb_data_type *mfd,
 	switch (metadata->op) {
 	case metadata_op_frame_rate:
 		metadata->data.panel_frame_rate =
-			mdss_panel_get_framerate(mfd->panel_info);
+			mdss_panel_get_framerate(mfd->panel_info,
+				FPS_RESOLUTION_DEFAULT);
 		pr_debug("current fps:%d\n", metadata->data.panel_frame_rate);
 		break;
 	case metadata_op_get_caps:
@@ -4894,7 +4920,8 @@ static int mdss_mdp_overlay_off(struct msm_fb_data_type *mfd)
 	 * As a last resort signal the timeline if vsync doesn't arrive.
 	 */
 	if (mdp5_data->retire_cnt) {
-		u32 fps = mdss_panel_get_framerate(mfd->panel_info);
+		u32 fps = mdss_panel_get_framerate(mfd->panel_info,
+				FPS_RESOLUTION_HZ);
 		u32 vsync_time = 1000 / (fps ? : DEFAULT_FRAME_RATE);
 
 		msleep(vsync_time);

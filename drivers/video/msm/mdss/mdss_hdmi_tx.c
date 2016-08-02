@@ -480,6 +480,7 @@ static int hdmi_tx_get_vic_from_panel_info(struct hdmi_tx_ctrl *hdmi_ctrl,
 			timing.front_porch_v, timing.pulse_width_v, v_total);
 
 		pclk = pinfo->clk_rate;
+
 		do_div(pclk, HDMI_TX_KHZ_TO_HZ);
 
 		timing.pixel_freq = (unsigned long) pclk;
@@ -891,6 +892,9 @@ static int hdmi_tx_update_pixel_clk(struct hdmi_tx_ctrl *hdmi_ctrl, int fps)
 	}
 
 	power_data->clk_config->rate = pinfo->clk_rate;
+
+	if (pinfo->out_format == MDP_Y_CBCR_H2V2)
+		power_data->clk_config->rate /= 2;
 
 	DEV_DBG("%s: rate %ld\n", __func__, power_data->clk_config->rate);
 
@@ -2419,7 +2423,9 @@ static int hdmi_tx_video_setup(struct hdmi_tx_ctrl *hdmi_ctrl)
 		if (pinfo->dfps_update ==
 			DFPS_IMMEDIATE_PORCH_UPDATE_MODE_HFP ||
 			pinfo->dfps_update ==
-				DFPS_IMMEDIATE_MULTI_UPDATE_MODE_CLK_HFP) {
+				DFPS_IMMEDIATE_MULTI_UPDATE_MODE_CLK_HFP ||
+			pinfo->dfps_update ==
+				DFPS_IMMEDIATE_MULTI_MODE_HFP_CALC_CLK) {
 			DEV_DBG("%s: hfp=%d, hbp=%d, hpw=%d\n", __func__,
 				pinfo->lcdc.h_front_porch,
 				pinfo->lcdc.h_back_porch,
@@ -4730,6 +4736,9 @@ static void hdmi_tx_update_fps(struct hdmi_tx_ctrl *hdmi_ctrl)
 		return;
 	}
 
+	DEV_DBG("%s: current fps %d, new fps %d\n", __func__,
+		pinfo->current_fps, hdmi_ctrl->dynamic_fps);
+
 	if (hdmi_ctrl->dynamic_fps == pinfo->current_fps) {
 		DEV_DBG("%s: Panel is already at this FPS: %d\n",
 			__func__, hdmi_ctrl->dynamic_fps);
@@ -4739,7 +4748,8 @@ static void hdmi_tx_update_fps(struct hdmi_tx_ctrl *hdmi_ctrl)
 	if (hdmi_tx_is_hdcp_enabled(hdmi_ctrl))
 		hdmi_tx_hdcp_off(hdmi_ctrl);
 
-	if (pinfo->dfps_update == DFPS_IMMEDIATE_MULTI_UPDATE_MODE_CLK_HFP) {
+	if (pinfo->dfps_update == DFPS_IMMEDIATE_MULTI_UPDATE_MODE_CLK_HFP ||
+		pinfo->dfps_update == DFPS_IMMEDIATE_MULTI_MODE_HFP_CALC_CLK) {
 		if (hdmi_tx_video_setup(hdmi_ctrl)) {
 			DEV_DBG("%s: no change in video timing\n", __func__);
 			return;
@@ -4801,6 +4811,7 @@ static void hdmi_tx_update_fps(struct hdmi_tx_ctrl *hdmi_ctrl)
 	timing.refresh_rate = hdmi_ctrl->dynamic_fps;
 
 	pclk = pinfo->clk_rate;
+
 	do_div(pclk, HDMI_TX_KHZ_TO_HZ);
 	timing.pixel_freq = (unsigned long) pclk;
 
@@ -4845,6 +4856,8 @@ static int hdmi_tx_panel_event_handler(struct mdss_panel_data *panel_data,
 	/* UPDATE FPS is called from atomic context */
 	if (event == MDSS_EVENT_PANEL_UPDATE_FPS) {
 		hdmi_ctrl->dynamic_fps = (u32) (unsigned long)arg;
+		DEV_DBG("%s: fps %d\n", __func__, hdmi_ctrl->dynamic_fps);
+
 		queue_work(hdmi_ctrl->workq, &hdmi_ctrl->fps_work);
 		return rc;
 	}

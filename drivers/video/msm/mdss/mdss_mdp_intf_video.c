@@ -833,7 +833,8 @@ static int mdss_mdp_video_ctx_stop(struct mdss_mdp_ctl *ctl,
 		}
 		WARN(rc, "intf %d blank error (%d)\n", ctl->intf_num, rc);
 
-		frame_rate = mdss_panel_get_framerate(pinfo);
+		frame_rate = mdss_panel_get_framerate(pinfo,
+				FPS_RESOLUTION_HZ);
 		if (!(frame_rate >= 24 && frame_rate <= 240))
 			frame_rate = 24;
 
@@ -1352,7 +1353,9 @@ static int mdss_mdp_video_config_fps(struct mdss_mdp_ctl *ctl, int new_fps)
 				pdata->panel_info.dfps_update
 				== DFPS_IMMEDIATE_PORCH_UPDATE_MODE_HFP ||
 				pdata->panel_info.dfps_update
-				== DFPS_IMMEDIATE_MULTI_UPDATE_MODE_CLK_HFP) {
+				== DFPS_IMMEDIATE_MULTI_UPDATE_MODE_CLK_HFP ||
+				pdata->panel_info.dfps_update
+				== DFPS_IMMEDIATE_MULTI_MODE_HFP_CALC_CLK) {
 			unsigned long flags;
 			if (!ctx->timegen_en) {
 				pr_err("TG is OFF. DFPS mode invalid\n");
@@ -1999,7 +2002,8 @@ void mdss_mdp_switch_to_cmd_mode(struct mdss_mdp_ctl *ctl, int prep)
 			  usecs_to_jiffies(VSYNC_TIMEOUT_US));
 	}
 	frame_rate = mdss_panel_get_framerate
-			(&(ctl->panel_data->panel_info));
+			(&(ctl->panel_data->panel_info),
+				FPS_RESOLUTION_HZ);
 	if (!(frame_rate >= 24 && frame_rate <= 240))
 		frame_rate = 24;
 	frame_rate = ((1000/frame_rate) + 1);

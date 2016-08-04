@@ -197,7 +197,7 @@ _kgsl_pool_shrink(struct kgsl_page_pool *pool, int num_pages)
  * starting from higher order pool.
  */
 static unsigned long
-kgsl_pool_reduce(unsigned int target_pages)
+kgsl_pool_reduce(unsigned int target_pages, bool exit)
 {
 	int total_pages = 0;
 	int i;
@@ -209,6 +209,14 @@ kgsl_pool_reduce(unsigned int target_pages)
 
 	for (i = (KGSL_NUM_POOLS - 1); i >= 0; i--) {
 		pool = &kgsl_pools[i];
+
+		/*
+		 * Only reduce the pool sizes for pools which are allowed to
+		 * allocate memory unless we are at close, in which case the
+		 * reserved memory for all pools needs to be freed
+		 */
+		if (!pool->allocation_allowed && !exit)
+			continue;
 
 		total_pages -= pcount;
 
@@ -323,17 +331,18 @@ int kgsl_pool_alloc_page(int *page_size, struct page **pages,
 		return -EINVAL;
 
 	pool = _kgsl_get_pool_from_order(order);
-	pool_idx = kgsl_pool_idx_lookup(order);
+	if (pool == NULL)
+		return -EINVAL;
 
-	if (pool != NULL)
-		page = _kgsl_pool_get_page(pool);
+	pool_idx = kgsl_pool_idx_lookup(order);
+	page = _kgsl_pool_get_page(pool);
 
 	/* Allocate a new page if not allocated from pool */
 	if (page == NULL) {
 		gfp_t gfp_mask = kgsl_gfp_mask(order);
 
 		/* Only allocate non-reserved memory for certain pools */
-		if (!pool->allocation_allowed) {
+		if (!pool->allocation_allowed && pool_idx > 0) {
 			*page_size = PAGE_SIZE <<
 					kgsl_pools[pool_idx-1].pool_order;
 			*align = ilog2(*page_size);
@@ -417,7 +426,7 @@ kgsl_pool_shrink_scan_objects(struct shrinker *shrinker,
 	int target_pages = (nr > total_pages) ? 0 : (total_pages - nr);
 
 	/* Reduce pool size to target_pages */
-	return kgsl_pool_reduce(target_pages);
+	return kgsl_pool_reduce(target_pages, false);
 }
 
 static unsigned long
@@ -448,7 +457,7 @@ void kgsl_init_page_pools(void)
 void kgsl_exit_page_pools(void)
 {
 	/* Release all pages in pools, if any.*/
-	kgsl_pool_reduce(0);
+	kgsl_pool_reduce(0, true);
 
 	/* Unregister shrinker */
 	unregister_shrinker(&kgsl_pool_shrinker);

@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -273,7 +273,7 @@ static struct afe_clk_set tdm_clk_set = {
 	AFE_API_VERSION_CLOCK_SET,
 	Q6AFE_LPASS_CLK_ID_QUAD_TDM_EBIT,
 	Q6AFE_LPASS_IBIT_CLK_DISABLE,
-	Q6AFE_LPASS_CLK_ATTRIBUTE_COUPLE_NO,
+	Q6AFE_LPASS_CLK_ATTRIBUTE_INVERT_COUPLE_NO,
 	Q6AFE_LPASS_CLK_ROOT_DEFAULT,
 	0,
 };
@@ -2194,7 +2194,7 @@ static int msm_auxpcm_dev_probe(struct platform_device *pdev)
 		goto fail_pdata_nomem;
 	}
 
-	dev_dbg(&pdev->dev, "%s: dev %p, dai_data %p, auxpcm_pdata %p\n",
+	dev_dbg(&pdev->dev, "%s: dev %pK, dai_data %pK, auxpcm_pdata %pK\n",
 		__func__, &pdev->dev, dai_data, auxpcm_pdata);
 
 	rc = of_property_read_u32_array(pdev->dev.of_node,

@@ -43,13 +43,13 @@
 /* This is a cmdbatch exclusive flag - use the CMDBATCH equivalent instead */
 #define KGSL_CONTEXT_SYNC               0x00000400
 #define KGSL_CONTEXT_PWR_CONSTRAINT     0x00000800
-
 #define KGSL_CONTEXT_PRIORITY_MASK      0x0000F000
 #define KGSL_CONTEXT_PRIORITY_SHIFT     12
 #define KGSL_CONTEXT_PRIORITY_UNDEF     0
 
 #define KGSL_CONTEXT_IFH_NOP            0x00010000
 #define KGSL_CONTEXT_SECURE             0x00020000
+#define KGSL_CONTEXT_NO_SNAPSHOT        0x00040000
 
 #define KGSL_CONTEXT_PREEMPT_STYLE_MASK       0x0E000000
 #define KGSL_CONTEXT_PREEMPT_STYLE_SHIFT      25
@@ -302,6 +302,7 @@ enum kgsl_timestamp_type {
 #define KGSL_PROP_SP_GENERIC_MEM	0x14
 #define KGSL_PROP_UCODE_VERSION		0x15
 #define KGSL_PROP_GPMU_VERSION		0x16
+#define KGSL_PROP_HIGHEST_BANK_BIT	0x17
 #define KGSL_PROP_DEVICE_BITNESS	0x18
 
 struct kgsl_shadowprop {

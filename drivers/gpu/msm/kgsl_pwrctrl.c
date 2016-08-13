@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2015, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -36,23 +36,12 @@
 
 #define UPDATE_BUSY_VAL		1000000
 
-/*
- * Expected delay for post-interrupt processing on A3xx.
- * The delay may be longer, gradually increase the delay
- * to compensate.  If the GPU isn't done by max delay,
- * it's working on something other than just the final
- * command sequence so stop waiting for it to be idle.
- */
-#define INIT_UDELAY		200
-#define MAX_UDELAY		2000
-
 /* Number of jiffies for a full thermal cycle */
 #define TH_HZ			(HZ/5)
 
 #define KGSL_MAX_BUSLEVELS	20
 
 #define DEFAULT_BUS_P 25
-#define DEFAULT_BUS_DIV (100 / DEFAULT_BUS_P)
 
 /* Order deeply matters here because reasons. New entries go on the end */
 static const char * const clocks[] = {
@@ -348,6 +337,8 @@ void kgsl_pwrctrl_pwrlevel_change(struct kgsl_device *device,
 	if (new_level == old_level)
 		return;
 
+	kgsl_pwrscale_update_stats(device);
+
 	/*
 	 * Set the active and previous powerlevel first in case the clocks are
 	 * off - if we don't do this then the pwrlevel change won't take effect
@@ -378,6 +369,28 @@ void kgsl_pwrctrl_pwrlevel_change(struct kgsl_device *device,
 			pwr->active_pwrlevel, pwrlevel->gpu_freq,
 			pwr->previous_pwrlevel,
 			pwr->pwrlevels[old_level].gpu_freq);
+
+	/*
+	 * Some targets do not support the bandwidth requirement of
+	 * GPU at TURBO, for such targets we need to set GPU-BIMC
+	 * interface clocks to TURBO directly whenever GPU runs at
+	 * TURBO. The TURBO frequency of gfx-bimc need to be defined
+	 * in target device tree.
+	 */
+	if (pwr->gpu_bimc_int_clk) {
+			if (pwr->active_pwrlevel == 0 &&
+					!pwr->gpu_bimc_interface_enabled) {
+				clk_set_rate(pwr->gpu_bimc_int_clk,
+						pwr->gpu_bimc_int_clk_freq);
+				clk_prepare_enable(pwr->gpu_bimc_int_clk);
+				pwr->gpu_bimc_interface_enabled = 1;
+			} else if (pwr->previous_pwrlevel == 0
+					&& pwr->gpu_bimc_interface_enabled) {
+				clk_disable_unprepare(pwr->gpu_bimc_int_clk);
+				pwr->gpu_bimc_interface_enabled = 0;
+		}
+	}
+
 	/* Change register settings if any AFTER pwrlevel change*/
 	kgsl_pwrctrl_pwrlevel_change_settings(device, 1);
 
@@ -868,6 +881,31 @@ static ssize_t kgsl_pwrctrl_gpu_available_frequencies_show(
 	return num_chars;
 }
 
+static ssize_t kgsl_pwrctrl_gpu_clock_stats_show(
+					struct device *dev,
+					struct device_attribute *attr,
+					char *buf)
+{
+	struct kgsl_device *device = kgsl_device_from_dev(dev);
+	struct kgsl_pwrctrl *pwr;
+	int index, num_chars = 0;
+
+	if (device == NULL)
+		return 0;
+	pwr = &device->pwrctrl;
+	mutex_lock(&device->mutex);
+	kgsl_pwrscale_update_stats(device);
+	mutex_unlock(&device->mutex);
+	for (index = 0; index < pwr->num_pwrlevels - 1; index++)
+		num_chars += snprintf(buf + num_chars, PAGE_SIZE - num_chars,
+			"%llu ", pwr->clock_times[index]);
+
+	if (num_chars < PAGE_SIZE)
+		buf[num_chars++] = '\n';
+
+	return num_chars;
+}
+
 static ssize_t kgsl_pwrctrl_reset_count_show(struct device *dev,
 					struct device_attribute *attr,
 					char *buf)
@@ -1120,6 +1158,9 @@ static DEVICE_ATTR(gpubusy, 0444, kgsl_pwrctrl_gpubusy_show,
 static DEVICE_ATTR(gpu_available_frequencies, 0444,
 	kgsl_pwrctrl_gpu_available_frequencies_show,
 	NULL);
+static DEVICE_ATTR(gpu_clock_stats, 0444,
+	kgsl_pwrctrl_gpu_clock_stats_show,
+	NULL);
 static DEVICE_ATTR(max_pwrlevel, 0644,
 	kgsl_pwrctrl_max_pwrlevel_show,
 	kgsl_pwrctrl_max_pwrlevel_store);
@@ -1165,6 +1206,7 @@ static const struct device_attribute *pwrctrl_attr_list[] = {
 	&dev_attr_deep_nap_timer,
 	&dev_attr_gpubusy,
 	&dev_attr_gpu_available_frequencies,
+	&dev_attr_gpu_clock_stats,
 	&dev_attr_max_pwrlevel,
 	&dev_attr_min_pwrlevel,
 	&dev_attr_thermal_pwrlevel,
@@ -1274,6 +1316,13 @@ static void kgsl_pwrctrl_clk(struct kgsl_device *device, int state,
 			&pwr->power_flags)) {
 			trace_kgsl_clk(device, state,
 					kgsl_pwrctrl_active_freq(pwr));
+			/* Disable gpu-bimc-interface clocks */
+			if (pwr->gpu_bimc_int_clk &&
+					pwr->gpu_bimc_interface_enabled) {
+				clk_disable_unprepare(pwr->gpu_bimc_int_clk);
+				pwr->gpu_bimc_interface_enabled = 0;
+			}
+
 			for (i = KGSL_MAX_CLKS - 1; i > 0; i--)
 				clk_disable(pwr->grp_clks[i]);
 			/* High latency clock maintenance. */
@@ -1287,6 +1336,9 @@ static void kgsl_pwrctrl_clk(struct kgsl_device *device, int state,
 					pwr->pwrlevels[pwr->num_pwrlevels - 1].
 					gpu_freq);
 			}
+
+			/* Turn off the IOMMU clocks */
+			kgsl_mmu_disable_clk(&device->mmu);
 		} else if (requested_state == KGSL_STATE_SLEEP) {
 			/* High latency clock maintenance. */
 			for (i = KGSL_MAX_CLKS - 1; i > 0; i--)
@@ -1316,7 +1368,22 @@ static void kgsl_pwrctrl_clk(struct kgsl_device *device, int state,
 			   this is to let GPU interrupt to come */
 			for (i = KGSL_MAX_CLKS - 1; i > 0; i--)
 				clk_enable(pwr->grp_clks[i]);
+			/* Enable the gpu-bimc-interface clocks */
+			if (pwr->gpu_bimc_int_clk) {
+				if (pwr->active_pwrlevel == 0 &&
+					!pwr->gpu_bimc_interface_enabled) {
+					clk_set_rate(pwr->gpu_bimc_int_clk,
+						pwr->gpu_bimc_int_clk_freq);
+					clk_prepare_enable(
+						pwr->gpu_bimc_int_clk);
+					pwr->gpu_bimc_interface_enabled = 1;
+				}
+			}
+
+			/* Turn on the IOMMU clocks */
+			kgsl_mmu_enable_clk(&device->mmu);
 		}
+
 	}
 }
 
@@ -1626,6 +1693,13 @@ int kgsl_pwrctrl_init(struct kgsl_device *device)
 		}
 	}
 
+	/* Getting gfx-bimc-interface-clk frequency */
+	if (!of_property_read_u32(pdev->dev.of_node,
+			"qcom,gpu-bimc-interface-clk-freq",
+			&pwr->gpu_bimc_int_clk_freq))
+		pwr->gpu_bimc_int_clk = devm_clk_get(&pdev->dev,
+					"bimc_gpu_clk");
+
 	pwr->power_flags = BIT(KGSL_PWRFLAGS_RETENTION_ON);
 
 	if (pwr->num_pwrlevels == 0) {
@@ -1803,6 +1877,9 @@ void kgsl_pwrctrl_close(struct kgsl_device *device)
 
 	for (i = 0; i < KGSL_MAX_REGULATORS; i++)
 		pwr->grp_clks[i] = NULL;
+
+	if (pwr->gpu_bimc_int_clk)
+		devm_clk_put(&device->pdev->dev, pwr->gpu_bimc_int_clk);
 
 	pwr->power_flags = 0;
 

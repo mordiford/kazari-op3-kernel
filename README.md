@@ -10,17 +10,10 @@
 - Custom kernel for OnePlus 3.
 - Only for CM-based ROMs.
 
-## CPU Governors
+## Special Features
 
-> **bold**: added by me
-
-- **alucard**
-- conservative
-- interactive
-- ondemand
-- performance
-- powersave
-- userspace
+- **alucard** CPU Governor
+- DASH Charge
 
 ## Thanks
 

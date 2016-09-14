@@ -13,6 +13,7 @@
 ## Special Features
 
 - **alucard** CPU Governor
+- **sioplus** I/O Scheduler
 - DASH Charge
 
 ## Thanks

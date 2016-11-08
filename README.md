@@ -2,7 +2,7 @@
 
 ![](https://img.shields.io/badge/oneplus-msm8996-ff69b4.svg?style=flat-square)
 ![](https://img.shields.io/badge/arch-arm64-blue.svg?style=flat-square) 
-![](https://img.shields.io/badge/linux-3.18.40-lightgray.svg?style=flat-square)
+![](https://img.shields.io/badge/linux-3.18.44-lightgray.svg?style=flat-square)
 ![](https://img.shields.io/badge/UBERTC-4.9--kernel-brightgreen.svg?style=flat-square)
 ![](https://img.shields.io/badge/DASH%20Charge-Available-orange.svg?style=flat-square)
 

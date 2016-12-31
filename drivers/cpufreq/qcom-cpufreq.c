@@ -28,44 +28,16 @@
 #include <linux/platform_device.h>
 #include <linux/of.h>
 #include <trace/events/power.h>
+#include <soc/qcom/socinfo.h>
 
 static DEFINE_MUTEX(l2bw_lock);
 
-
-static unsigned long arg_cpu_max_c1 = 1593600;
-
-static int __init cpufreq_read_cpu_max_c1(char *cpu_max_c1)
-{
-	unsigned long ui_khz;
-	int ret;
-
-	ret = kstrtoul(cpu_max_c1, 0, &ui_khz);
-	if (ret)
-		return -EINVAL;
-
-	arg_cpu_max_c1 = ui_khz;
-	printk("cpu_max_c1=%lu\n", arg_cpu_max_c1);
-	return ret;
-}
-__setup("cpu_max_c1=", cpufreq_read_cpu_max_c1);
-
-static unsigned long arg_cpu_max_c2 = 2150400;
-
-static int __init cpufreq_read_cpu_max_c2(char *cpu_max_c2)
-{
-	unsigned long ui_khz;
-	int ret;
-
-	ret = kstrtoul(cpu_max_c2, 0, &ui_khz);
-	if (ret)
-		return -EINVAL;
-
-	arg_cpu_max_c2 = ui_khz;
-	printk("cpu_max_c2=%lu\n", arg_cpu_max_c2);
-	return ret;
-}
-__setup("cpu_max_c2=", cpufreq_read_cpu_max_c2);
-
+// AP: Default startup frequencies
+#define CONFIG_CPU_FREQ_MIN_CLUSTER1	307200
+#define CONFIG_CPU_FREQ_MAX_CLUSTER1	1593600
+#define CONFIG_CPU_FREQ_MIN_CLUSTER2	307200
+#define CONFIG_CPU_FREQ_MAX_CLUSTER2	2150400
+#define CONFIG_CPU_FREQ_MAX_CLUSTER2PRO	2342400
 
 static struct clk *cpu_clk[NR_CPUS];
 static struct clk *l2_clk;
@@ -180,7 +152,41 @@ static int msm_cpufreq_init(struct cpufreq_policy *policy)
 			cpumask_set_cpu(cpu, policy->cpus);
 
 	if (cpufreq_frequency_table_cpuinfo(policy, table))
+	{
+		// AP: set default frequencies to prevent overclocking or underclocking during start
+		if (policy->cpu <= 1)
+		{
+			policy->cpuinfo.min_freq = CONFIG_CPU_FREQ_MIN_CLUSTER1;
+			policy->cpuinfo.max_freq = CONFIG_CPU_FREQ_MAX_CLUSTER1;
+		}
+
+		if (policy->cpu >= 2)
+		{
+			policy->cpuinfo.min_freq = CONFIG_CPU_FREQ_MIN_CLUSTER2;
+			if (socinfo_get_id() == 305)
+				policy->cpuinfo.max_freq = CONFIG_CPU_FREQ_MAX_CLUSTER2PRO;
+			else
+				policy->cpuinfo.max_freq = CONFIG_CPU_FREQ_MAX_CLUSTER2;
+		}
+
 		pr_err("cpufreq: failed to get policy min/max\n");
+	}
+
+	// AP: set default frequencies to prevent overclocking or underclocking during start
+	if (policy->cpu <= 1)
+	{
+		policy->min = CONFIG_CPU_FREQ_MIN_CLUSTER1;
+		policy->max = CONFIG_CPU_FREQ_MAX_CLUSTER1;
+	}
+
+	if (policy->cpu >= 2)
+	{
+		policy->min = CONFIG_CPU_FREQ_MIN_CLUSTER2;
+		if (socinfo_get_id() == 305)
+			policy->max = CONFIG_CPU_FREQ_MAX_CLUSTER2PRO;
+		else
+			policy->max = CONFIG_CPU_FREQ_MAX_CLUSTER2;
+	}
 
 	cur_freq = clk_get_rate(cpu_clk[policy->cpu])/1000;
 
@@ -403,13 +409,6 @@ static struct cpufreq_frequency_table *cpufreq_parse_dt(struct device *dev,
 		 */
 		if (i > 0 && f <= ftbl[i-1].frequency)
 			break;
-
-		//Custom max freq
-		if ((cpu < 2 && f > arg_cpu_max_c1) ||
-				(cpu >= 2 && f > arg_cpu_max_c2)) {
-			nf = i;
-			break;
-		}
 
 		ftbl[i].driver_data = i;
 		ftbl[i].frequency = f;

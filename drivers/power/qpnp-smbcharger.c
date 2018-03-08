@@ -1,4 +1,4 @@
-/* Copyright (c) 2014-2017 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2014-2018 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -2675,6 +2675,8 @@ static void smbchg_parallel_usb_enable(struct smbchg_chip *chip,
 			"Couldn't set Vflt on parallel psy rc: %d\n", rc);
 		return;
 	}
+	power_supply_set_voltage_limit(chip->usb_psy,
+			(chip->vfloat_mv + 50) * 1000);
 	/* Set USB ICL */
 	target_icl_ma = get_effective_result_locked(chip->usb_icl_votable);
 	if (target_icl_ma < 0) {
@@ -3728,8 +3730,11 @@ static int smbchg_float_voltage_set(struct smbchg_chip *chip, int vfloat_mv)
 
 	if (rc)
 		dev_err(chip->dev, "Couldn't set float voltage rc = %d\n", rc);
-	else
+	else {
 		chip->vfloat_mv = vfloat_mv;
+		power_supply_set_voltage_limit(chip->usb_psy,
+				chip->vfloat_mv * 1000);
+	}
 
 	return rc;
 }
@@ -5268,6 +5273,7 @@ static int smbchg_change_usb_supply_type(struct smbchg_chip *chip,
 						enum power_supply_type type)
 {
 	int rc, current_limit_ma;
+	union power_supply_propval propval;
 
 	/*
 	 * if the type is not unknown, set the type before changing ICL vote
@@ -5306,8 +5312,12 @@ static int smbchg_change_usb_supply_type(struct smbchg_chip *chip,
 		goto out;
 	}
 
-	if (!chip->skip_usb_notification)
-		power_supply_set_supply_type(chip->usb_psy, type);
+	if (!chip->skip_usb_notification) {
+		propval.intval = type;
+		chip->usb_psy->set_property(chip->usb_psy,
+				POWER_SUPPLY_PROP_REAL_TYPE,
+				&propval);
+	}
 
 	/*
 	 * otherwise if it is unknown, remove vote

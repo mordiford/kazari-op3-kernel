@@ -5275,7 +5275,6 @@ static int smbchg_change_usb_supply_type(struct smbchg_chip *chip,
 	int rc;
 	// default to DEFAULT_SDP_MA
 	int current_limit_ma = DEFAULT_SDP_MA;
-	union power_supply_propval propval;
 
 	/*
 	 * if the type is not unknown, set the type before changing ICL vote

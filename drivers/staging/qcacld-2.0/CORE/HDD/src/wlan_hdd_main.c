@@ -482,19 +482,9 @@ static VOS_STATUS hdd_wlan_green_ap_deattach(hdd_context_t *pHddCtx)
         goto done;
     }
 
-    /* check if the timer status is destroyed */
-    if (VOS_TIMER_STATE_RUNNING ==
-            vos_timer_getCurrentState(&green_ap->ps_timer))
-    {
-        vos_timer_stop(&green_ap->ps_timer);
-    }
-
-    /* Destroy the Green AP timer */
-    if (!VOS_IS_STATUS_SUCCESS(vos_timer_destroy(
-                    &green_ap->ps_timer)))
-    {
+    status = vos_timer_deinit(&green_ap->ps_timer);
+    if (!VOS_IS_STATUS_SUCCESS(status))
         hddLog(LOG1, FL("Cannot deallocate Green-AP's timer"));
-    }
 
     /* release memory */
     vos_mem_zero((void *)green_ap, sizeof(*green_ap));
@@ -3160,6 +3150,14 @@ hdd_parse_set_roam_scan_channels_v2(hdd_adapter_t *pAdapter,
 
    for (i = 0; i < num_chan; i++) {
       channel = *value++;
+      if (!channel) {
+         VOS_TRACE(VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_ERROR,
+                   "%s: Channels end at index %d, expected %d",
+                   __func__, i, num_chan);
+         ret = -EINVAL;
+         goto exit;
+      }
+
       if (channel > WNI_CFG_CURRENT_CHANNEL_STAMAX) {
          VOS_TRACE(VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_ERROR,
                    "%s: index %d invalid channel %d", __func__, i, channel);
@@ -5086,7 +5084,7 @@ static int hdd_driver_rxfilter_comand_handler(uint8_t *command,
 	ret = kstrtou8(value, 10, &type);
 	if (ret < 0) {
 		hddLog(LOGE,
-			FL("kstrtou8 failed invalid input value %d"), type);
+			FL("kstrtou8 failed invalid input value"));
 		return -EINVAL;
 	}
 
@@ -8752,6 +8750,12 @@ static void hdd_update_tgt_services(hdd_context_t *hdd_ctx,
     cfg_ini->enable_sap_auth_offload &= cfg->sap_auth_offload_service;
 #endif
     cfg_ini->sap_get_peer_info &= cfg->get_peer_info_enabled;
+    if (cfg_ini->wowEnable && (!cfg->wow_support)) {
+        hdd_ctx->prevent_suspend = true;
+        cfg_ini->wowEnable = 0;
+    } else {
+        hdd_ctx->prevent_suspend = false;
+    }
 }
 
 /**
@@ -12379,9 +12383,9 @@ err_init_adapter_mode:
 err_init_packet_filtering:
 	hdd_adapter_runtime_suspend_denit(adapter);
 
-	free_netdev(adapter->dev);
 	wlan_hdd_release_intf_addr(hdd_ctx,
 				   adapter->macAddressCurrent.bytes);
+	free_netdev(adapter->dev);
 
 	/* If bmps disabled enable it */
 	if (!hdd_ctx->cfg_ini->enablePowersaveOffload) {
@@ -12767,6 +12771,13 @@ VOS_STATUS hdd_stop_adapter( hdd_context_t *pHddCtx, hdd_adapter_t *pAdapter,
 #ifdef WLAN_NS_OFFLOAD
          cancel_work_sync(&pAdapter->ipv6NotifierWorkQueue);
 #endif
+#ifdef FEATURE_WLAN_DISABLE_CHANNEL_SWITCH
+         /*
+          * If Do_Not_Break_Stream was enabled clear avoid channel list.
+          */
+         if (pHddCtx->restrict_offchan_flag)
+             wlan_hdd_send_avoid_freq_for_dnbs(pHddCtx, 0);
+#endif
          if (bCloseSession)
              hdd_wait_for_sme_close_sesion(pHddCtx, pAdapter);
          break;
@@ -12970,6 +12981,7 @@ static enum nl80211_timeout_reason hdd_convert_timeout_reason(
 	}
 }
 
+#if defined CFG80211_CONNECT_TIMEOUT
 /**
  * hdd_cfg80211_connect_timeout() - API to send connection timeout reason
  * @dev: network device
@@ -12990,6 +13002,7 @@ static void hdd_cfg80211_connect_timeout(struct net_device *dev,
 	cfg80211_connect_timeout(dev, bssid, NULL, 0, GFP_KERNEL,
 				 nl_timeout_reason);
 }
+#endif /* CFG80211_CONNECT_TIMEOUT */
 
 /**
  * __hdd_connect_bss() - API to send connection status to supplicant
@@ -14522,6 +14535,34 @@ enum driver_unload_state{
 	unload_finish = 0xff
 };
 
+#ifdef FEATURE_BUS_BANDWIDTH
+static void hdd_deinit_bus_bw_timer(hdd_context_t *hdd_ctx)
+{
+	VOS_TIMER_STATE vos_timer_state;
+
+	vos_timer_state = vos_timer_getCurrentState(&hdd_ctx->bus_bw_timer);
+
+	if (vos_timer_state == VOS_TIMER_STATE_UNUSED)
+		return;
+
+	if (VOS_TIMER_STATE_RUNNING == vos_timer_state) {
+		vos_timer_stop(&hdd_ctx->bus_bw_timer);
+		hdd_rst_tcp_delack(hdd_ctx);
+
+		if (hdd_ctx->hbw_requested) {
+			vos_remove_pm_qos();
+			hdd_ctx->hbw_requested = false;
+		}
+	}
+
+	if (!VOS_IS_STATUS_SUCCESS(vos_timer_destroy(&hdd_ctx->bus_bw_timer)))
+		hddLog(VOS_TRACE_LEVEL_ERROR,
+		       "%s: Cannot deallocate Bus bandwidth timer", __func__);
+}
+#else
+static inline void hdd_deinit_bus_bw_timer(hdd_context_t *hdd_ctx) {}
+#endif
+
 /**---------------------------------------------------------------------------
 
   \brief hdd_wlan_exit() - HDD WLAN exit function
@@ -14594,10 +14635,10 @@ void hdd_wlan_exit(hdd_context_t *pHddCtx)
       hddLog(VOS_TRACE_LEVEL_FATAL,"%s: hddDevTmUnregisterNotifyCallback failed",__func__);
    }
 
-   if (VOS_TIMER_STATE_RUNNING ==
-                  vos_timer_getCurrentState(&pHddCtx->tdls_source_timer))
-       vos_timer_stop(&pHddCtx->tdls_source_timer);
-   vos_timer_destroy(&pHddCtx->tdls_source_timer);
+   vosStatus = vos_timer_deinit(&pHddCtx->tdls_source_timer);
+   if (!VOS_IS_STATUS_SUCCESS(vosStatus))
+      hddLog(VOS_TRACE_LEVEL_FATAL,
+             "%s: deinit tdls source timer failed", __func__);
 
    /*
     * Cancel any outstanding scan requests.  We are about to close all
@@ -14616,38 +14657,14 @@ void hdd_wlan_exit(hdd_context_t *pHddCtx)
     */
    TRACK_UNLOAD_STATUS(unload_aborting_all_scan);
    hdd_abort_mac_scan_all_adapters(pHddCtx);
-#ifdef FEATURE_BUS_BANDWIDTH
-   if (VOS_TIMER_STATE_RUNNING ==
-                        vos_timer_getCurrentState(&pHddCtx->bus_bw_timer))
-   {
-      vos_timer_stop(&pHddCtx->bus_bw_timer);
-      hdd_rst_tcp_delack(pHddCtx);
-
-      if (pHddCtx->hbw_requested) {
-          vos_remove_pm_qos();
-          pHddCtx->hbw_requested = false;
-      }
-   }
-
-   if (!VOS_IS_STATUS_SUCCESS(vos_timer_destroy(
-                         &pHddCtx->bus_bw_timer)))
-   {
-      hddLog(VOS_TRACE_LEVEL_ERROR,
-            "%s: Cannot deallocate Bus bandwidth timer", __func__);
-   }
-#endif
+   hdd_deinit_bus_bw_timer(pHddCtx);
 
 #ifdef FEATURE_WLAN_AP_AP_ACS_OPTIMIZE
-   if (VOS_TIMER_STATE_RUNNING ==
-                vos_timer_getCurrentState(&pHddCtx->skip_acs_scan_timer)) {
-       vos_timer_stop(&pHddCtx->skip_acs_scan_timer);
-   }
+   vosStatus = vos_timer_deinit(&pHddCtx->skip_acs_scan_timer);
+   if (!VOS_IS_STATUS_SUCCESS(vosStatus))
+       hddLog(VOS_TRACE_LEVEL_FATAL, "%s: deinit skip acs scan timer failed",
+              __func__);
 
-   if (!VOS_IS_STATUS_SUCCESS(vos_timer_destroy(
-                         &pHddCtx->skip_acs_scan_timer))) {
-       hddLog(VOS_TRACE_LEVEL_ERROR,
-            "%s: Cannot deallocate ACS Skip timer", __func__);
-   }
    spin_lock(&pHddCtx->acs_skip_lock);
    vos_mem_free(pHddCtx->last_acs_channel_list);
    pHddCtx->last_acs_channel_list = NULL;
@@ -16005,17 +16022,21 @@ static int wlan_hdd_set_wow_pulse(hdd_context_t *phddctx, bool enable)
 				pcfg_ini->wow_pulse_interval_low;
 		wow_pulse_set_info.wow_pulse_interval_high=
 				pcfg_ini->wow_pulse_interval_high;
+		wow_pulse_set_info.wow_pulse_repeat_count=
+				pcfg_ini->wow_pulse_repeat_count;
 	} else {
 		wow_pulse_set_info.wow_pulse_enable = false;
 		wow_pulse_set_info.wow_pulse_pin = 0;
 		wow_pulse_set_info.wow_pulse_interval_low = 0;
 		wow_pulse_set_info.wow_pulse_interval_high= 0;
+		wow_pulse_set_info.wow_pulse_repeat_count= 0;
 	}
-	hddLog(LOG1,"%s: enable %d pin %d low %d high %d",
+	hddLog(LOG1,"%s: enable %d pin %d low %d high %d count = %d",
 		__func__, wow_pulse_set_info.wow_pulse_enable,
 		wow_pulse_set_info.wow_pulse_pin,
 		wow_pulse_set_info.wow_pulse_interval_low,
-		wow_pulse_set_info.wow_pulse_interval_high);
+		wow_pulse_set_info.wow_pulse_interval_high,
+		wow_pulse_set_info.wow_pulse_repeat_count);
 
 	status = sme_set_wow_pulse(&wow_pulse_set_info);
 	if (VOS_STATUS_E_FAILURE == status) {
@@ -16345,7 +16366,48 @@ static inline void hdd_get_thermal_shutdown_ini_param(tSmeThermalParams   *pther
 {
 	return;
 }
+#endif
 
+#ifdef WLAN_FEATURE_MOTION_DETECTION
+VOS_STATUS hdd_mt_host_ev_cb(void *pcb_cxt, tSirMtEvent *pevent)
+{
+	hdd_context_t *hddctx;
+	hdd_adapter_t *adapter;
+	tHalHandle hHal;
+	int status;
+	tSirMotionDetEnable enable;
+
+	if (pcb_cxt == NULL || pevent == NULL) {
+		hddLog(VOS_TRACE_LEVEL_ERROR,
+			FL("HDD context is not valid"));
+			return VOS_STATUS_E_INVAL;
+	}
+
+	hddctx = (hdd_context_t *)pcb_cxt;
+	status = wlan_hdd_validate_context(hddctx);
+	if (0 != status)
+		return VOS_STATUS_E_INVAL;
+
+	adapter = hdd_get_adapter_by_vdev(hddctx, pevent->vdev_id);
+
+	hddLog(VOS_TRACE_LEVEL_INFO,
+		FL("hdd_mt_host_ev_cb vdev_id=%u, status=%u"),
+		pevent->vdev_id, pevent->status);
+
+	if (adapter->motion_detection_mode == 1) {
+	    hHal = WLAN_HDD_GET_HAL_CTX(adapter);
+
+	    enable.vdev_id = pevent->vdev_id;
+	    enable.enable = 1;
+
+	    hddLog(VOS_TRACE_LEVEL_INFO,
+		FL("hdd_mt_host_ev_cb enable mt again"));
+
+	    sme_MotionDetEnable(hHal, &enable);
+	}
+
+	return VOS_STATUS_SUCCESS;
+}
 #endif
 /**---------------------------------------------------------------------------
 
@@ -16492,6 +16554,11 @@ int hdd_wlan_startup(struct device *dev, v_VOID_t *hif_sc)
    if (status != 0) {
        goto err_free_hdd_context;
    }
+
+#ifdef FEATURE_WLAN_DISABLE_CHANNEL_SWITCH
+   spin_lock_init(&pHddCtx->restrict_offchan_lock);
+   mutex_init(&pHddCtx->avoid_freq_lock);
+#endif
 
    spin_lock_init(&pHddCtx->dfs_lock);
    spin_lock_init(&pHddCtx->sap_update_info_lock);
@@ -17404,6 +17471,10 @@ int hdd_wlan_startup(struct device *dev, v_VOID_t *hif_sc)
     wlan_hdd_cfg80211_link_layer_stats_init(pHddCtx);
     wlan_hdd_tsf_init(pHddCtx);
 
+#ifdef WLAN_FEATURE_MOTION_DETECTION
+    sme_set_mt_host_ev_cb(pHddCtx->hHal, hdd_mt_host_ev_cb, pHddCtx);
+#endif
+
 #ifdef WLAN_FEATURE_LPSS
    wlan_hdd_send_all_scan_intf_info(pHddCtx);
    wlan_hdd_send_version_pkg(pHddCtx->target_fw_version,
@@ -18097,14 +18168,14 @@ static void __exit hdd_module_exit(void)
 
 #ifdef MODULE
 static int fwpath_changed_handler(const char *kmessage,
-                                 struct kernel_param *kp)
+                                  const struct kernel_param *kp)
 {
    return param_set_copystring(kmessage, kp);
 }
 
 #if ! defined(QCA_WIFI_FTM)
 static int con_mode_handler(const char *kmessage,
-                                 struct kernel_param *kp)
+                            const struct kernel_param *kp)
 {
    return param_set_int(kmessage, kp);
 }
@@ -18121,7 +18192,7 @@ static int con_mode_handler(const char *kmessage,
 
   --------------------------------------------------------------------------*/
 static int fwpath_changed_handler(const char *kmessage,
-                                  struct kernel_param *kp)
+                                  const struct kernel_param *kp)
 {
 	int ret;
 	bool mode_change;
@@ -18170,7 +18241,8 @@ static int fwpath_changed_handler(const char *kmessage,
   \return -
 
   --------------------------------------------------------------------------*/
-static int con_mode_handler(const char *kmessage, struct kernel_param *kp)
+static int con_mode_handler(const char *kmessage,
+                            const struct kernel_param *kp)
 {
    int ret;
 
@@ -19611,6 +19683,9 @@ void wlan_hdd_check_sta_ap_concurrent_ch_intf(void *data)
     hdd_ap_ctx_t *pHddApCtx;
     uint16_t intf_ch = 0, vht_channel_width = 0;
     eCsrBand orig_band, new_band;
+    uint16_t ch_width;
+    hdd_adapter_list_node_t *adapter_node = NULL, *next = NULL;
+    VOS_STATUS status;
 
    if ((pHddCtx->cfg_ini->WlanMccToSccSwitchMode == VOS_MCC_TO_SCC_SWITCH_DISABLE)
        || !(vos_concurrent_open_sessions_running()
@@ -19658,6 +19733,7 @@ void wlan_hdd_check_sta_ap_concurrent_ch_intf(void *data)
             }
         }
     }
+    ch_width = pHddApCtx->sapConfig.ch_width_orig;
 
     hddLog(VOS_TRACE_LEVEL_INFO,
         FL("SAP restarts due to MCC->SCC switch, orig chan: %d, new chan: %d"),
@@ -19679,14 +19755,28 @@ void wlan_hdd_check_sta_ap_concurrent_ch_intf(void *data)
         hdd_sta_state_sap_notify(pHddCtx, STA_NOTIFY_CONNECTED, csa_info);
     }else{
 #endif
-        pHddApCtx->bss_stop_reason = BSS_STOP_DUE_TO_MCC_SCC_SWITCH;
-        sme_SelectCBMode(hHal,
-                     pHddApCtx->sapConfig.SapHw_mode,
-                     pHddApCtx->sapConfig.channel,
-                     pHddApCtx->sapConfig.sec_ch,
-                     &vht_channel_width, pHddApCtx->sapConfig.ch_width_orig);
-        wlan_sap_set_vht_ch_width(pHddApCtx->sapContext, vht_channel_width);
-        wlan_hdd_restart_sap(ap_adapter);
+    status =  hdd_get_front_adapter (pHddCtx, &adapter_node);
+    while (NULL != adapter_node && VOS_STATUS_SUCCESS == status) {
+        ap_adapter = adapter_node->pAdapter;
+        if (ap_adapter && ap_adapter->device_mode == WLAN_HDD_SOFTAP) {
+            if (test_bit(SOFTAP_INIT_DONE, &ap_adapter->event_flags)) {
+                pHddApCtx = WLAN_HDD_GET_AP_CTX_PTR(ap_adapter);
+                hHal = WLAN_HDD_GET_HAL_CTX(ap_adapter);
+                pHddApCtx->sapConfig.channel = intf_ch;
+                pHddApCtx->bss_stop_reason = BSS_STOP_DUE_TO_MCC_SCC_SWITCH;
+                sme_SelectCBMode(hHal,
+                             pHddApCtx->sapConfig.SapHw_mode,
+                             pHddApCtx->sapConfig.channel,
+                             pHddApCtx->sapConfig.sec_ch,
+                             &vht_channel_width, ch_width);
+                wlan_sap_set_vht_ch_width(pHddApCtx->sapContext, vht_channel_width);
+                hddLog(VOS_TRACE_LEVEL_INFO, FL("Restart prev SAP session "));
+                wlan_hdd_restart_sap(ap_adapter);
+            }
+        }
+        status = hdd_get_next_adapter (pHddCtx, adapter_node, &next);
+        adapter_node = next;
+    }
 #ifdef WLAN_FEATURE_SAP_TO_FOLLOW_STA_CHAN
     }
 #endif
@@ -20422,15 +20512,27 @@ MODULE_LICENSE("Dual BSD/GPL");
 MODULE_AUTHOR("Qualcomm Atheros, Inc.");
 MODULE_DESCRIPTION("WLAN HOST DEVICE DRIVER");
 
+#if !defined(QCA_WIFI_FTM)
+static const struct kernel_param_ops con_mode_ops = {
+    .set = con_mode_handler,
+    .get = param_get_int,
+};
+#endif
+
+static const struct kernel_param_ops fwpath_ops = {
+    .set = fwpath_changed_handler,
+    .get = param_get_string,
+};
+
 #if  defined(QCA_WIFI_FTM)
 module_param(con_mode, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
 #else
-module_param_call(con_mode, con_mode_handler, param_get_int, &con_mode,
-                    S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+module_param_cb(con_mode, &con_mode_ops, &con_mode,
+                S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
 #endif
 
-module_param_call(fwpath, fwpath_changed_handler, param_get_string, &fwpath,
-                    S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+module_param_cb(fwpath, &fwpath_ops, &fwpath,
+                S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
 
 module_param(enable_dfs_chan_scan, int,
              S_IRUSR | S_IRGRP | S_IROTH);

@@ -446,6 +446,9 @@ typedef struct tagCsrScanResultFilter
      */
     uint8_t scan_filter_for_roam;
     tCsrBssid bssid_hint;
+#ifdef FEATURE_WLAN_DISABLE_CHANNEL_SWITCH
+    tVOS_CON_MODE csrPersona;
+#endif
 #ifdef WLAN_FEATURE_FILS_SK
     bool realm_check;
     uint8_t fils_realm[2];
@@ -1388,6 +1391,14 @@ typedef struct tagCsrConfigParam
     bool    enable_fatal_event;
     uint32_t tx_aggregation_size;
     uint32_t rx_aggregation_size;
+    uint32_t tx_aggr_sw_retry_threshhold_be;
+    uint32_t tx_aggr_sw_retry_threshhold_bk;
+    uint32_t tx_aggr_sw_retry_threshhold_vi;
+    uint32_t tx_aggr_sw_retry_threshhold_vo;
+    uint32_t tx_non_aggr_sw_retry_threshhold_be;
+    uint32_t tx_non_aggr_sw_retry_threshhold_bk;
+    uint32_t tx_non_aggr_sw_retry_threshhold_vi;
+    uint32_t tx_non_aggr_sw_retry_threshhold_vo;
     bool enable_edca_params;
     uint32_t edca_vo_cwmin;
     uint32_t edca_vi_cwmin;

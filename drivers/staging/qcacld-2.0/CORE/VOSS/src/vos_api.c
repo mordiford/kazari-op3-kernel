@@ -794,7 +794,7 @@ VOS_STATUS vos_open( v_CONTEXT_t *pVosContext, v_SIZE_t hddContextSize )
                "%s: VOSS successfully Opened", __func__);
 
    *pVosContext = gpVosContext;
-
+   gpVosContext->is_closed = false;
    return VOS_STATUS_SUCCESS;
 
 
@@ -1155,6 +1155,12 @@ VOS_STATUS vos_stop( v_CONTEXT_t vosContext )
 {
   VOS_STATUS vosStatus;
 
+  if (gpVosContext->is_closed) {
+      VOS_TRACE(VOS_MODULE_ID_VOSS, VOS_TRACE_LEVEL_INFO,
+                "%s: vos is already closed", __func__);
+      return VOS_STATUS_SUCCESS;
+  }
+
   /* WDA_Stop is called before the SYS so that the processing of Riva
   pending responces will not be handled during uninitialization of WLAN driver */
   vos_event_reset( &(gpVosContext->wdaCompleteEvent) );
@@ -1197,6 +1203,12 @@ VOS_STATUS vos_stop( v_CONTEXT_t vosContext )
 VOS_STATUS vos_close( v_CONTEXT_t vosContext )
 {
   VOS_STATUS vosStatus;
+
+  if (gpVosContext->is_closed) {
+      VOS_TRACE(VOS_MODULE_ID_VOSS, VOS_TRACE_LEVEL_INFO,
+                "%s: already closed", __func__);
+      return VOS_STATUS_SUCCESS;
+  }
 
   vosStatus = wma_wmi_work_close( vosContext );
   if (!VOS_IS_STATUS_SUCCESS(vosStatus)) {
@@ -1303,6 +1315,7 @@ VOS_STATUS vos_close( v_CONTEXT_t vosContext )
 
   vos_wdthread_flush_timer_work();
 
+  gpVosContext->is_closed = true;
   return VOS_STATUS_SUCCESS;
 }
 
@@ -3341,3 +3354,51 @@ v_BOOL_t vos_is_ch_switch_with_csa_enabled(void)
 	return FALSE;
 }
 #endif//#ifdef WLAN_FEATURE_SAP_TO_FOLLOW_STA_CHAN
+
+#ifdef FEATURE_WLAN_DISABLE_CHANNEL_SWITCH
+/**
+ * vos_is_chan_ok_for_dnbs() - check if the channel is valid for dnbs
+ *
+ * @channel: the given channel to be compared
+ *
+ * This function check if the channel is valid for dnbs. If the disable channel
+ * switch is enabled and the channel is same as SAP's channel, return true, if
+ * the channel is not same as SAP's channel or there's no SAP, return false. If
+ * the disable channel switch is not enabled, return true.
+ *
+ * Return: bool
+ */
+bool vos_is_chan_ok_for_dnbs(uint8_t channel)
+{
+	hdd_context_t *pHddCtx;
+	bool equal = false;
+
+	if (!channel) {
+		VOS_TRACE(VOS_MODULE_ID_VOSS, VOS_TRACE_LEVEL_ERROR,
+				"%s: Invalid parameter", __func__);
+		return false;
+	}
+
+	pHddCtx = (hdd_context_t*)(gpVosContext->pHDDContext);
+	if(NULL == pHddCtx)
+	{
+	  VOS_TRACE( VOS_MODULE_ID_VOSS, VOS_TRACE_LEVEL_FATAL,
+				"%s: Hdd Context is Null", __func__);
+	  return false;
+	}
+
+	spin_lock_bh(&pHddCtx->restrict_offchan_lock);
+	if (pHddCtx->restrict_offchan_flag) {
+		VOS_TRACE(VOS_MODULE_ID_VOSS, VOS_TRACE_LEVEL_INFO,
+				"%s: flag is set", __func__);
+		wlansap_channel_compare(gpVosContext->pMACContext, channel, &equal);
+		spin_unlock_bh(&pHddCtx->restrict_offchan_lock);
+		return equal;
+	}
+	else
+		VOS_TRACE(VOS_MODULE_ID_VOSS, VOS_TRACE_LEVEL_INFO,
+				"%s: flag is not set", __func__);
+	spin_unlock_bh(&pHddCtx->restrict_offchan_lock);
+	return true;
+}
+#endif

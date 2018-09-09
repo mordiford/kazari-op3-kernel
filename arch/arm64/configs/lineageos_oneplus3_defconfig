@@ -1,4 +1,4 @@
-CONFIG_LOCALVERSION="_kazari-op3-kernel_v6.1.2-dev"
+CONFIG_LOCALVERSION="_kazari-op3-kernel_v6.1.3-dev"
 # CONFIG_SWAP is not set
 # CONFIG_USELIB is not set
 CONFIG_AUDIT=y
